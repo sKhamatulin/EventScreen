@@ -1,0 +1,340 @@
+Пишем приложение.
+
+Технологии: Flask, html, css, js
+
+Функционал: загрузка видео в папку, бесконечное воспроизведение 20 видео из папки, модерация загруженных видео, перед тем как добавить их в очередь воспроизведения.
+
+Страцицы:
+1. Страница для пользователей. Пользоватлеь, без авторизации попадает на страницу, где видит 1 кнопку для загрузки видео, по которой можно выгрузить видео из галерии телефона на сервер.
+2. Страница модератора. Нужна авторизация администратора (простая логин-пароль). На странице видны все последние видео, ожидающие подтверждения от модератора на добавление в очередь воспроизведения. Есть список видео и 2 кнопки: Accept/Decline. Есть воможность проигрывания видео.
+3. Страница бесконечного воспроизвдения видео, которые подтвердил модератор.
+
+Рабочее состояние:
+Пользователь переходит по ссылке, загружает вижео, оно попадает в хранилище для подтверждения от модератора. При загрузке, видео должно обрезатся до 15 секунд и сжиматься до 10 мегабайт.
+Модератор видит запрос на добавление видео, просматривает его и либо подтверждает, либо отвергает. При подтверждении, видео попадает в основую папку хранения, при отклонении безвозвратно удаляется с сервера.
+Когда видео добавлено в основную папку хранения, оно добавляется в очередь воспроизведения на странице показа видео. Максимально на сервере можен хранится 20 видео, при добавлении 21-ого, первого должно безвозвратно удалится.
+
+Требования:
+Ограничение памяти на сревере 500мб хранилища.
+Все страницы должы бать адаптированы под экраны мобильных устройства. Страница модератора должна поддерживать технологию PWA.
+Всё прилжение будет размещенно на pythonanywhere
+
+
+
+Вот моё приложение. Для загрузки, модерации и показа видео роликов.
+
+app.py
+```python
+from flask import Flask, render_template, request, redirect, url_for, flash
+from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
+from werkzeug.utils import secure_filename
+import os
+from moviepy.editor import VideoFileClip
+
+app = Flask(__name__)
+app.secret_key = 'your_secret_key'
+app.config['UPLOAD_FOLDER'] = 'static/uploads'
+app.config['ACCEPTED_FOLDER'] = 'static/uploads/accepted'
+app.config['ALLOWED_EXTENSIONS'] = {'mp4', 'avi', 'mov'}
+app.config['MAX_VIDEOS'] = 20
+
+
+login_manager = LoginManager()
+login_manager.init_app(app)
+
+# Модератор
+class User(UserMixin):
+    def __init__(self, username):
+        self.username = username
+
+    def get_id(self):
+        return self.username 
+
+@login_manager.user_loader
+def load_user(user_id):
+    return User(user_id)
+
+# Проверка расширения файла
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
+
+# Функция для обработки видео с помощью moviepy
+def process_video(input_path, output_path):
+    with VideoFileClip(input_path) as video:
+        # Обрезка до 15 секунд
+        video = video.subclip(0, min(15, video.duration))
+        
+        # Изменение ориентации на вертикальную
+        if video.size[0] > video.size[1]:  # Если ширина больше высоты
+            video = video.resize(height=480)  # Изменяем размер, сохраняя пропорции
+
+        # Сохранение видео с ограничением по размеру
+        video.write_videofile(output_path, codec='libx264', bitrate='3000k')
+
+# Главная страница для пользователей
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+# Загрузка видео
+@app.route('/upload', methods=['POST'])
+def upload_file():
+    if 'file' not in request.files:
+        flash('No file part')
+        return redirect(request.url)
+    file = request.files['file']
+    if file.filename == '':
+        flash('No selected file')
+        return redirect(request.url)
+    if file and allowed_file(file.filename):
+        filename = secure_filename(file.filename)
+        temp_path = os.path.join(app.config['UPLOAD_FOLDER'], 'temp_' + filename)
+        file.save(temp_path)
+
+        # Обрезка и сжатие видео
+        output_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        try:
+            process_video(temp_path, output_path)
+        except Exception as e:
+            flash(f'Error processing video: {str(e)}')
+            return redirect(url_for('index'))
+
+        # Удаление временного файла
+        os.remove(temp_path)
+
+        flash('File uploaded successfully')
+        return redirect(url_for('index'))
+
+# Страница модератора
+@app.route('/moderator')
+def moderator():
+    if current_user.is_authenticated:
+        videos = [video for video in os.listdir(app.config['UPLOAD_FOLDER']) if os.path.isfile(os.path.join(app.config['UPLOAD_FOLDER'], video))]
+        return render_template('moderator.html', videos=videos)
+    else:
+        flash('You need to log in to access this page.')
+        return render_template('login.html')
+
+# Модерация видео
+@app.route('/moderate/<action>/<filename>', methods=['POST'])
+@login_required
+def moderate_video(action, filename):
+    video_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+
+    if action == 'accept':
+        # Перемещение видео в основную папку
+        accepted_path = os.path.join(app.config['ACCEPTED_FOLDER'], filename)
+        os.rename(video_path, accepted_path)
+
+        # Проверка на количество видео
+        if len(os.listdir(app.config['ACCEPTED_FOLDER'])) > app.config['MAX_VIDEOS']:
+            # Удаление самого старого видео
+            oldest_video = min(os.listdir(app.config['ACCEPTED_FOLDER']), key=os.path.getctime)
+            os.remove(os.path.join(app.config['ACCEPTED_FOLDER'], oldest_video))
+
+        flash('Video accepted and added to the playlist.')
+    elif action == 'decline':
+        # Удаление видео
+        if os.path.isfile(video_path):
+            os.remove(video_path)
+            flash('Video declined and removed.')
+        else:
+            flash('Error: The specified video does not exist or is not a file.')
+
+    # Обновление списка видео после модерации
+    return redirect(url_for('moderator'))  # Перенаправление на страницу модератора
+
+# Страница воспроизведения видео
+@app.route('/player')
+def player():
+    videos = os.listdir(os.path.join(app.config['ACCEPTED_FOLDER']))
+    return render_template('player.html', videos=videos)
+
+# Простой логин и пароль для модератора
+ADMIN_USERNAME = 'admin'
+ADMIN_PASSWORD = 'admin'  # Замените на более безопасный пароль
+
+@app.route('/login', methods=['POST'])
+def login():
+    username = request.form['username']
+    password = request.form['password']
+    if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
+        user = User(username)
+        login_user(user)
+        return redirect(url_for('moderator'))
+    else:
+        flash('Invalid credentials')
+        return redirect(url_for('index'))
+
+@app.route('/logout')
+@login_required
+def logout():
+    logout_user()
+    return redirect(url_for('index'))
+
+# Запуск приложения
+if __name__ == '__main__':
+    app.run(debug=True)
+
+```
+
+index.html
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <title>Video Upload</title>
+</head>
+<body>
+    <h1>EventScreen</h1>
+    <form action="/upload" method="post" enctype="multipart/form-data">
+        <div class="uploadform">
+            <div>
+                <input type="file" name="file" accept="video/*" required>
+            </div>
+            <div>
+                <button type="submit">Upload</button>
+            <div/>
+        </div>
+    </form>
+</body>
+<script>
+    if ('serviceWorker' in navigator) {
+        window.addEventListener('load', function() {
+            navigator.serviceWorker.register('/static/service-worker.js').then(function(registration) {
+                console.log('ServiceWorker registration successful with scope: ', registration.scope);
+            }, function(err) {
+                console.log('ServiceWorker registration failed: ', err);
+            });
+        });
+    }
+</script>
+</html>
+```
+
+moerator.html
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <title>Moderator Page</title>
+</head>
+<body>
+    <h1>Moderate Videos</h1>
+    <table>
+        <thead>
+            <tr>
+                <th>Video</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for video in videos %}
+            <tr>
+                <td>
+                    <video width="320" height="240" controls>
+                        <source src="{{ url_for('static', filename='uploads/' + video) }}" type="video/mp4">
+                        Your browser does not support the video tag.
+                    </video>
+                </td>
+                <td>
+                    <form action="{{ url_for('moderate_video', action='accept', filename=video) }}" method="post">
+                        <button type="submit">Accept</button>
+                    </form>
+                    <form action="{{ url_for('moderate_video', action='decline', filename=video) }}" method="post">
+                        <button type="submit">Decline</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</body>
+</html>
+```
+
+login.html
+```html 
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <title>Login</title>
+</head>
+<body>
+    <h1>Login</h1>
+    <form action="/login" method="post">
+        <input type="text" name="username" placeholder="Username" required>
+        <input type="password" name="password" placeholder="Password" required>
+        <button type="submit">Login</button>
+    </form>
+    {% with messages = get_flashed_messages() %}
+        {% if messages %}
+            <ul>
+            {% for message in messages %}
+                <li>{{ message }}</li>
+            {% endfor %}
+            </ul>
+        {% endif %}
+    {% endwith %}
+</body>
+</html>
+```
+
+player.html
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <title>Video Player</title>
+</head>
+<body>
+    <h1>Video Player</h1>
+    <div id="video-container">
+        {% if videos|length == 0 %}
+            <p>EventScreen Player is waiting for the first video...</p>
+        {% else %}
+            <video id="video-player" width="320" height="240" controls>
+                <source id="video-source" src="" type="video/mp4">
+                Your browser does not support the video tag.
+            </video>
+        {% endif %}
+    </div>
+    <script>
+        // Логика для бесконечного воспроизведения видео
+        const videos = {{ videos|tojson }}; // Получаем список видео из Flask
+        let currentVideo = 0;
+        const videoPlayer = document.getElementById('video-player');
+        const videoSource = document.getElementById('video-source');
+
+        function playNextVideo() {
+            if (videos.length === 0) return; // Если нет видео, ничего не делаем
+            videoSource.src = "{{ url_for('static', filename='uploads/accepted/') }}" + videos[currentVideo];
+            videoPlayer.load();
+            videoPlayer.play();
+            currentVideo = (currentVideo + 1) % videos.length; // Переход к следующему видео
+        }
+
+        if (videos.length > 0) {
+            videoPlayer.addEventListener('ended', playNextVideo); // Запускаем следующее видео по окончании текущего
+            playNextVideo(); // Начинаем воспроизведение при загрузке страницы
+        }
+    </script>
+</body>
+</html>
+
+```
+
+Файлы загружаются битыми. Проверил локально, при загрузки видео на localhost потом не могу его открыть руками в системе
+

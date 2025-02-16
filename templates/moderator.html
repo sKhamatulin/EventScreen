@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <title>Moderator Page</title>
+</head>
+<body>
+    <h1>Moderate Videos</h1>
+    <table>
+        <thead>
+            <tr>
+                <th>Video</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for video in videos %}
+            <tr>
+                <td>
+                    <video width="320" height="240" controls>
+                        <source src="{{ url_for('static', filename='uploads/' + video) }}" type="video/mp4">
+                        Your browser does not support the video tag.
+                    </video>
+                </td>
+                <td>
+                    <form action="{{ url_for('moderate_video', action='accept', filename=video) }}" method="post">
+                        <button type="submit">Accept</button>
+                    </form>
+                    <form action="{{ url_for('moderate_video', action='decline', filename=video) }}" method="post">
+                        <button type="submit">Decline</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</body>
+</html>

@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <title>Video Player</title>
+</head>
+<body>
+    <h1>Video Player</h1>
+    <div class="player">
+        <div id="video-container">
+            {% if videos|length == 0 %}
+                <p>EventScreen Player is waiting for the first video...</p>
+            {% else %}
+                <video id="video-player" width="320" height="640" controls>
+                    <source id="video-source" src="" type="video/mp4">
+                    Your browser does not support the video tag.
+                </video>
+            {% endif %}
+        </div>
+    </div>
+    <script>
+        // Логика для бесконечного воспроизведения видео
+        const videos = {{ videos|tojson }}; // Получаем список видео из Flask
+        let currentVideo = 0;
+        const videoPlayer = document.getElementById('video-player');
+        const videoSource = document.getElementById('video-source');
+
+        function playNextVideo() {
+            if (videos.length === 0) return; // Если нет видео, ничего не делаем
+            videoSource.src = "{{ url_for('static', filename='uploads/accepted/') }}" + videos[currentVideo];
+            videoPlayer.load();
+            videoPlayer.play();
+            currentVideo = (currentVideo + 1) % videos.length; // Переход к следующему видео
+        }
+
+        if (videos.length > 0) {
+            videoPlayer.addEventListener('ended', playNextVideo); // Запускаем следующее видео по окончании текущего
+            playNextVideo(); // Начинаем воспроизведение при загрузке страницы
+        }
+    </script>
+</body>
+</html>
